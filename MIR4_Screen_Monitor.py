@@ -21,7 +21,7 @@ import winsound
 CURRENT_VERSION = "1.1.0"
 
 # Replace with your actual hosted version JSON URL (e.g., GitHub Raw URL)
-UPDATE_URL = "https://raw.githubusercontent.com/DemiG33k/mir4-monitor/main/version.json"
+UPDATE_URL = "https://raw.githubusercontent.com/YOUR_USERNAME/YOUR_REPO/main/version.json"
 
 # Set Tesseract binary path
 pytesseract.pytesseract.tesseract_cmd = (
