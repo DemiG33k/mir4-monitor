@@ -1,5 +1,6 @@
 import json
 import os
+import subprocess
 import sys
 import threading
 import time
@@ -13,6 +14,14 @@ from PIL import Image, ImageGrab
 import pytesseract
 import requests
 import winsound
+
+# ==========================================
+# CONFIGURATION & CONSTANTS
+# ==========================================
+CURRENT_VERSION = "1.1.0"
+
+# Replace with your actual hosted version JSON URL (e.g., GitHub Raw URL)
+UPDATE_URL = "https://raw.githubusercontent.com/DemiG33k/mir4-monitor/main/version.json"
 
 # Set Tesseract binary path
 pytesseract.pytesseract.tesseract_cmd = (
@@ -68,10 +77,10 @@ class PlaceholderEntry(ttk.Entry):
 
   def set_value(self, text):
     """Sets a value programmatically (e.g. from saved config)."""
-    if text:
+    if text is not None and str(text) != "":
       self.is_placeholder_active = False
       self.delete(0, tk.END)
-      self.insert(0, text)
+      self.insert(0, str(text))
       self.config(foreground=self.default_fg_color)
     else:
       self._add_placeholder()
@@ -81,18 +90,22 @@ class MIR4MonitorGUI:
 
   def __init__(self, root):
     self.root = root
-    self.root.title("MIR4 Screen Monitor & Alert System")
-    self.root.geometry("540x580")
+    self.root.title(
+        f"MIR4 Screen Monitor & Alert System (v{CURRENT_VERSION})"
+    )
+    self.root.geometry("540x650")
     self.root.resizable(False, False)
 
     self.bbox = None
     self.monitoring = False
-    self.in_combat_state = False
     self.last_beep_time = 0
 
     self._build_ui()
     self.load_config()
     self.log(f"System initialized. Config path: {CONFIG_FILE}")
+
+    # Check for online updates silently on startup
+    self.check_for_updates(silent=True)
 
   def _build_ui(self):
     self.notebook = ttk.Notebook(self.root)
@@ -129,6 +142,33 @@ class MIR4MonitorGUI:
         self.main_tab, placeholder="e.g. my_mir4_topic_123", width=60
     )
     self.ntfy_entry.pack(fill="x", **padding)
+
+    # Required Duration Configuration
+    ttk.Label(
+        self.main_tab,
+        text="Required On-Screen Duration Before Alert:",
+        font=("Segoe UI", 9, "bold"),
+    ).pack(anchor="w", **padding)
+    delay_frame = ttk.Frame(self.main_tab)
+    delay_frame.pack(fill="x", padx=10, pady=2)
+
+    self.delay_h_entry = PlaceholderEntry(
+        delay_frame, placeholder="0", width=6
+    )
+    self.delay_h_entry.pack(side="left")
+    ttk.Label(delay_frame, text="h").pack(side="left", padx=(2, 12))
+
+    self.delay_m_entry = PlaceholderEntry(
+        delay_frame, placeholder="0", width=6
+    )
+    self.delay_m_entry.pack(side="left")
+    ttk.Label(delay_frame, text="m").pack(side="left", padx=(2, 12))
+
+    self.delay_s_entry = PlaceholderEntry(
+        delay_frame, placeholder="0", width=6
+    )
+    self.delay_s_entry.pack(side="left")
+    ttk.Label(delay_frame, text="s").pack(side="left", padx=(2, 0))
 
     # Region Selection Button
     self.select_btn = ttk.Button(
@@ -194,7 +234,7 @@ class MIR4MonitorGUI:
 
     ttk.Label(
         self.about_tab,
-        text="MIR4 Screen Monitor & Alert System",
+        text=f"MIR4 Screen Monitor & Alert System (v{CURRENT_VERSION})",
         font=("Segoe UI", 12, "bold"),
     ).pack(anchor="w", **padding)
     ttk.Label(
@@ -204,12 +244,22 @@ class MIR4MonitorGUI:
         foreground="#2c3e50",
     ).pack(anchor="w", padx=15, pady=2)
 
+    btn_frame = ttk.Frame(self.about_tab)
+    btn_frame.pack(anchor="w", padx=15, pady=6)
+
     report_btn = ttk.Button(
-        self.about_tab,
+        btn_frame,
         text="✉ Report Bug / Send Feedback",
         command=self.open_email_client,
     )
-    report_btn.pack(anchor="w", padx=15, pady=6)
+    report_btn.pack(side="left", padx=(0, 10))
+
+    update_btn = ttk.Button(
+        btn_frame,
+        text="🔄 Check for Updates",
+        command=lambda: self.check_for_updates(silent=False),
+    )
+    update_btn.pack(side="left")
 
     ttk.Separator(self.about_tab, orient="horizontal").pack(
         fill="x", pady=10, padx=15
@@ -246,6 +296,126 @@ class MIR4MonitorGUI:
     disc_box.config(state="disabled")
     disc_box.pack(fill="x", padx=15, pady=5)
 
+  # ==========================================
+  # AUTO UPDATE MECHANISM
+  # ==========================================
+  def check_for_updates(self, silent=True):
+    """Checks online version.json for updates."""
+
+    def _worker():
+      try:
+        response = requests.get(UPDATE_URL, timeout=5)
+        if response.status_code != 200:
+          if not silent:
+            self.root.after(
+                0,
+                lambda: messagebox.showerror(
+                    "Update Error",
+                    f"Server returned HTTP status {response.status_code}",
+                ),
+            )
+          return
+
+        data = response.json()
+        latest_version = data.get("version")
+        download_url = data.get("download_url")
+        changelog = data.get("changelog", "No changelog provided.")
+
+        if latest_version and latest_version > CURRENT_VERSION:
+          self.root.after(
+              0,
+              lambda: self._prompt_update(
+                  latest_version, download_url, changelog
+              ),
+          )
+        elif not silent:
+          self.root.after(
+              0,
+              lambda: messagebox.showinfo(
+                  "Up to Date",
+                  f"You are running the latest version (v{CURRENT_VERSION}).",
+              ),
+          )
+
+      except Exception as e:
+        if not silent:
+          err_str = str(e)
+          self.root.after(
+              0,
+              lambda msg=err_str: messagebox.showerror(
+                  "Update Error", f"Could not check for updates:\n{msg}"
+              ),
+          )
+
+    threading.Thread(target=_worker, daemon=True).start()
+
+  def _prompt_update(self, new_version, download_url, changelog):
+    msg = (
+        f"A new update (v{new_version}) is available!\n"
+        f"Current Version: v{CURRENT_VERSION}\n\n"
+        f"Changelog:\n{changelog}\n\n"
+        f"Would you like to download and update now?"
+    )
+    if messagebox.askyesno("Update Available", msg):
+      threading.Thread(
+          target=self._download_and_install,
+          args=(download_url,),
+          daemon=True,
+      ).start()
+
+  def _download_and_install(self, download_url):
+    try:
+      self.log("[UPDATE] Downloading update package...")
+
+      # Path to current running process
+      current_exe = (
+          sys.executable
+          if getattr(sys, "frozen", False)
+          else os.path.abspath(__file__)
+      )
+
+      # If running as raw Python script instead of PyInstaller executable
+      if not getattr(sys, "frozen", False):
+        self.log(
+            "[UPDATE] Running as .py script. Opening download link in browser..."
+        )
+        webbrowser.open(download_url)
+        return
+
+      temp_exe = current_exe + ".new"
+
+      # Download updated EXE
+      with requests.get(download_url, stream=True, timeout=15) as r:
+        r.raise_for_status()
+        with open(temp_exe, "wb") as f:
+          for chunk in r.iter_content(chunk_size=8192):
+            f.write(chunk)
+
+      self.log("[UPDATE] Download complete. Restarting application...")
+
+      # Command Prompt script: Waits 2s for process to close, replaces EXE, launches updated app
+      cmd = (
+          f'timeout /t 2 /nobreak > NUL & move /y "{temp_exe}" "{current_exe}" &'
+          f' start "" "{current_exe}"'
+      )
+      subprocess.Popen(cmd, shell=True)
+
+      # Force exit current app to release file lock
+      self.root.after(0, self.root.destroy)
+
+    except Exception as e:
+      err_str = str(e)
+      self.log(f"[ERROR] Update failed: {err_str}")
+      self.root.after(
+          0,
+          lambda msg=err_str: messagebox.showerror(
+              "Update Failed", f"Failed to complete update:\n{msg}"
+          ),
+      )
+
+  # ==========================================
+  # GENERAL APP FUNCTIONS
+  # ==========================================
   def open_email_client(self):
     recipient = "furny777@gmail.com"
     subject = "MIR4 Monitor Bug Report / Feedback"
@@ -273,6 +443,9 @@ class MIR4MonitorGUI:
     config_data = {
         "target_text": self.target_text_entry.get_value(),
         "ntfy_topic": self.ntfy_entry.get_value(),
+        "delay_h": self.delay_h_entry.get_value(),
+        "delay_m": self.delay_m_entry.get_value(),
+        "delay_s": self.delay_s_entry.get_value(),
         "bbox": list(self.bbox) if self.bbox else None,
     }
     try:
@@ -297,6 +470,15 @@ class MIR4MonitorGUI:
       if config_data.get("ntfy_topic"):
         self.ntfy_entry.set_value(config_data["ntfy_topic"])
 
+      if "delay_h" in config_data:
+        self.delay_h_entry.set_value(config_data["delay_h"])
+
+      if "delay_m" in config_data:
+        self.delay_m_entry.set_value(config_data["delay_m"])
+
+      if "delay_s" in config_data:
+        self.delay_s_entry.set_value(config_data["delay_s"])
+
       if config_data.get("bbox"):
         self.bbox = tuple(config_data["bbox"])
         self.region_label.config(
@@ -318,6 +500,18 @@ class MIR4MonitorGUI:
       self.log_text.config(state="disabled")
 
     self.root.after(0, _update)
+
+  def get_required_duration_seconds(self):
+    def parse_time(val):
+      try:
+        return max(0, int(val))
+      except ValueError:
+        return 0
+
+    h = parse_time(self.delay_h_entry.get_value())
+    m = parse_time(self.delay_m_entry.get_value())
+    s = parse_time(self.delay_s_entry.get_value())
+    return (h * 3600) + (m * 60) + s
 
   def send_phone_notification(self, message, title="MIR4 Alert"):
     ntfy_topic = self.ntfy_entry.get_value()
@@ -449,6 +643,9 @@ class MIR4MonitorGUI:
     target_text = self.target_text_entry.get_value().lower()
     self.log(f"OCR actively searching for text string: '{target_text}'")
 
+    detection_start_time = None
+    alert_sent = False
+
     try:
       while self.monitoring:
         img_pil = ImageGrab.grab(bbox=self.bbox)
@@ -473,35 +670,66 @@ class MIR4MonitorGUI:
           break
 
         if target_text in detected_text.lower():
-          if not self.in_combat_state:
-            self.in_combat_state = True
-            self.log(f"[ALERT TRIGGERED] Recognized text: '{detected_text}'")
+          current_time = time.time()
+
+          # First frame target text was detected
+          if detection_start_time is None:
+            detection_start_time = current_time
+            alert_sent = False
+            self.log(
+                f"[TEXT DETECTED] Found '{detected_text}'. Starting duration"
+                " timer..."
+            )
+
+          elapsed = current_time - detection_start_time
+          required_duration = self.get_required_duration_seconds()
+
+          # Trigger notification once on-screen threshold is reached
+          if elapsed >= required_duration and not alert_sent:
+            alert_sent = True
+            self.log(
+                f"[ALERT TRIGGERED] Text on screen continuously for"
+                f" {int(elapsed)}s."
+            )
             self.send_phone_notification(
-                f"Target text '{target_text}' detected on screen!",
+                f"Target text '{target_text}' has been on screen for"
+                f" {int(elapsed)}s!",
                 title="MIR4 Alert Triggered",
             )
 
-          current_time = time.time()
-          if current_time - self.last_beep_time > 0.3:
+          # Play sound once alert condition has been fulfilled
+          if alert_sent and (current_time - self.last_beep_time > 0.3):
             threading.Thread(target=self._play_beep, daemon=True).start()
             self.last_beep_time = current_time
 
         else:
-          if self.in_combat_state:
-            self.in_combat_state = False
-            self.log("[ALERT CLEARED] Target text is no longer visible.")
-            self.send_phone_notification(
-                "Target text cleared.", title="MIR4 Alert Cleared"
-            )
+          # Reset timer if target text vanishes
+          if detection_start_time is not None:
+            elapsed = time.time() - detection_start_time
+            if alert_sent:
+              self.log("[ALERT CLEARED] Target text is no longer visible.")
+              self.send_phone_notification(
+                  "Target text cleared.", title="MIR4 Alert Cleared"
+              )
+            else:
+              self.log(
+                  f"[TIMER RESET] Text disappeared after {int(elapsed)}s"
+                  " (before threshold of"
+                  f" {self.get_required_duration_seconds()}s was reached)."
+              )
+
+            detection_start_time = None
+            alert_sent = False
 
         time.sleep(0.05)
 
     except Exception as e:
-      self.log(f"[CRITICAL ERROR] Monitor thread crashed: {e}")
+      err_msg = str(e)
+      self.log(f"[CRITICAL ERROR] Monitor thread crashed: {err_msg}")
       self.root.after(
           0,
-          lambda: messagebox.showerror(
-              "Runtime Error", f"Error during screen monitoring: {e}"
+          lambda msg=err_msg: messagebox.showerror(
+              "Runtime Error", f"Error during screen monitoring: {msg}"
           ),
       )
     finally:
