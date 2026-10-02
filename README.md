@@ -18,7 +18,7 @@ Designed with a thread-safe architecture to prevent GUI lockups while running sc
 - **Instant Phone Push Notifications:** Integrates with `ntfy.sh` for high-priority mobile alerts.
 - **Local Sound Alarms:** Plays customizable asynchronous audio alerts upon detection.
 - **Live Debug Console:** Features a thread-safe event and error logger directly inside the GUI interface.
-
+- **Time Delay:** User has the ability to set the time, of how long the detected text is on screen before sending notification.
 ---
 
 ## Prerequisites
