@@ -1,0 +1,5 @@
+{
+  "version": "1.1.0",
+  "download_url": "https://github.com/DemiG33k/mir4-monitor/releases/download/v1.1.0/MIR4_Screen_Monitor.exe",
+  "changelog": "Ability for the user to change the length of time the detected text shows on screen before sending a notification! and auto update to newest version when asked."
+}
